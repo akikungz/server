@@ -1,0 +1,24 @@
+{
+  "name": "whitecup",
+  "private": true,
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
+    "shadcn-ui": "cd packages/ui && bunx shadcn-ui",
+    "postshadcn-ui": "bun packages/ui/scripts/shadcn-ui.ts"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5",
+    "turbo": "^2.0.11",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "bun@1.1.21",
+  "workspaces": [
+    "apps/*"
+  ]
+}
