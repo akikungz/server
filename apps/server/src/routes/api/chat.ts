@@ -31,6 +31,7 @@ export default new Elysia(
     .decorate('rooms', [] as ChatRoom[])
     .decorate('timeouts', {} as Record<string, Timer>)
     .decorate('calls', {} as Record<string, Call>)
+    .decorate('whiteboard', {} as Record<string, unknown[]>)
     .get("/rooms", ({ rooms }) => rooms.map(room => ({ id: room.id, title: room.title })))
     .post("/rooms", 
         ({ body: { title }, client, rooms, set }) => {
@@ -212,26 +213,26 @@ export default new Elysia(
             })
 
             // Broadcast message to all clients in the room
-            ws.data.calls[ws.data.params.id].clients.forEach(client => {
-                (client.ws as typeof ws).send(JSON.stringify({
-                    type: "join",
-                    data: {
-                        id: ws.id,
-                        name: ws.data.query.name
-                    }
-                }))
-            })
+            ws.data.calls[ws.data.params.id].clients
+                .filter(client => client.id !== ws.id)
+                .forEach(client => {
+                    (client.ws as typeof ws).send(JSON.stringify({
+                        type: "join",
+                        data: {
+                            id: ws.id,
+                            name: ws.data.query.name
+                        }
+                    }))
+                })
         },
         message: (ws, m: unknown) => {
             const message = m as {
-                type: "join" | "offer" | "answer" | "candidate";
+                type: "join" | "offer" | "answer" | "candidate" | "leave";
                 data: unknown;
             }
 
             // WebRTC signaling
             if (message.type === "offer") {
-                ws.data.calls[ws.data.params.id].offer = message.data as RTCSessionDescriptionInit
-
                 ws.data.calls[ws.data.params.id].clients.forEach(client => {
                     if (client.id !== ws.id) {
                         (client.ws as typeof ws).send(JSON.stringify({
@@ -258,6 +259,17 @@ export default new Elysia(
                         }))
                     }
                 })
+            } else if (message.type === "leave") {
+                ws.data.calls[ws.data.params.id].clients.forEach(client => {
+                    if (client.id !== ws.id) {
+                        (client.ws as typeof ws).send(JSON.stringify({
+                            type: "leave",
+                            data: {
+                                id: ws.id
+                            }
+                        }))
+                    }
+                })
             }
         },
         close: (ws) => {
@@ -270,6 +282,72 @@ export default new Elysia(
                 if (ws.data.calls[ws.data.params.id].clients.length === 0) {
                     delete ws.data.calls[ws.data.params.id]
                 }
+            }
+        }
+    })
+    .ws("/whiteboard/:id", {
+        open: (ws) => {
+            if (!ws.data.rooms.find(room => room.id == ws.data.params.id)) {
+                ws.send("Room not found")
+                ws.close()
+                return;
+            }
+
+            if (!ws.data.query.name) {
+                ws.send("Name is required")
+                ws.close()
+                return;
+            }
+
+            if (!ws.data.whiteboard[ws.data.params.id]) {
+                ws.data.whiteboard[ws.data.params.id] = []
+            }
+
+            ws.data.whiteboard[ws.data.params.id].push(ws as unknown)
+
+            ws.data.whiteboard[ws.data.params.id].forEach(client => {
+                if (client !== ws) {
+                    (client as typeof ws).send(JSON.stringify({
+                        type: "join",
+                        data: {
+                            id: ws.id,
+                            name: ws.data.query.name
+                        }
+                    }))
+                }
+            })
+        },
+        message: (ws, m: unknown) => {
+            const message = m as {
+                type: "draw" | "clear";
+                data: unknown;
+            }
+
+            if (message.type === "draw") {
+                ws.data.whiteboard[ws.data.params.id].forEach(client => {
+                    if (client !== ws) {
+                        (client as typeof ws).send(JSON.stringify({
+                            type: "draw",
+                            data: message.data
+                        }))
+                    }
+                })
+            } else if (message.type === "clear") {
+                ws.data.whiteboard[ws.data.params.id].forEach(client => {
+                    if (client !== ws) {
+                        (client as typeof ws).send(JSON.stringify({
+                            type: "clear"
+                        }))
+                    }
+                })
+            }
+        },
+        close: (ws) => {
+            if (ws.data.whiteboard[ws.data.params.id]) {
+                ws.data.whiteboard[ws.data.params.id].splice(
+                    ws.data.whiteboard[ws.data.params.id].findIndex(client => (client as typeof ws).id == ws.id),
+                    1
+                )
             }
         }
     })

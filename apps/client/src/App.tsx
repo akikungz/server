@@ -24,11 +24,17 @@ export default function App() {
   const [currentRoom, setCurrentRoom] = useState<CurrentRoom | null>(null);
 
   const messageRef = useRef<HTMLDivElement>(null);
+  const callMessageRef = useRef<HTMLDivElement>(null);
 
   const [calling, setCalling] = useState<boolean>(false);
+  const [callWS, setCallWS] = useState<WebSocket | null>(null);
 
   const localVideo = useRef<HTMLVideoElement>(null);
   const remoteVideo = useRef<HTMLVideoElement>(null);
+
+  const [whiteboard, setWhiteboard] = useState<boolean>(false);
+  const [whiteboardWS, setWhiteboardWS] = useState<WebSocket | null>(null);
+  const whiteboardCanvas = useRef<HTMLCanvasElement>(null);
 
   const Message = ({ user, timestamp, message }: ChatMessage) => {
     return (
@@ -43,7 +49,7 @@ export default function App() {
             {new Date(timestamp).toLocaleString()}
           </span>
         </div>
-        <p className="text-white">{message}</p>
+        <span className="text-white">{message}</span>
       </div>
     )
   }
@@ -98,17 +104,278 @@ export default function App() {
   const join_call = () => {
     if (!currentRoom) return;
 
+    const peerConnection = new RTCPeerConnection({
+      iceServers: [
+        {
+          urls: "stun:stun.l.google.com:19302"
+        }
+      ],
+      iceCandidatePoolSize: 10
+    });
+    
     setCalling(true);
     const ws = server.api.chat.calls[currentRoom.id].subscribe({
       $query: {
         name: currentRoom.username
       }
     });
+    setCallWS(ws.ws);
+
+    peerConnection.onicecandidate = (e) => {
+      if (e.candidate) {
+        ws.send(JSON.stringify({
+          type: "candidate",
+          data: e.candidate
+        }));
+      }
+    }
+
+    peerConnection.ontrack = (e) => {
+      if (remoteVideo.current) remoteVideo.current.srcObject = e.streams[0];
+    }
+
+    peerConnection.sctp?.addEventListener("statechange", (e) => {
+      console.log("SCTP State", e);
+    })
+
+    ws.on("open", () => {
+      console.log("Connected to call");
+      currentRoom.ws.send("Joining call");
+      
+      const constraints = {
+        video: true,
+        audio: true
+      };
+
+      navigator.mediaDevices.getUserMedia(constraints)
+        .then((stream) => {
+          // localVideo.current!.srcObject = stream;
+          if (localVideo.current) {
+            localVideo.current.srcObject = stream;
+          }
+
+          stream.getTracks()
+            .forEach(track => peerConnection.addTrack(track, stream));
+
+          ws.on("message", (m) => {
+            const message = m.data as {
+              type: "join" | "offer" | "answer" | "candidate";
+              data: unknown;
+            };
+
+            if (message.type === "join") {
+              console.log("Joining call");
+              peerConnection?.createOffer().then((offer) => {
+                peerConnection?.setLocalDescription(offer);
+                ws.send(JSON.stringify({
+                  type: "offer",
+                  data: offer
+                }));
+              });
+            }
+
+            if (message.type === "offer") {
+              peerConnection?.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescription));
+              peerConnection?.createAnswer().then((answer) => {
+                peerConnection?.setLocalDescription(answer);
+                ws.send(JSON.stringify({
+                  type: "answer",
+                  data: answer
+                }));
+              });
+            }
+
+            if (message.type === "answer") {
+              peerConnection?.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescription));
+            }
+
+            if (message.type === "candidate") {
+              peerConnection?.addIceCandidate(new RTCIceCandidate(message.data as RTCIceCandidate));
+            }
+          });
+        }).catch(console.error);
+      
+    });
+
+    ws.on("close", () => {
+      console.log("Disconnected from call");
+      setCalling(false);
+      setCallWS(null);
+      peerConnection.close();
+    });
+
+    ws.on("message", (m) => {
+      const message = m.data as {
+        type: "join" | "offer" | "answer" | "candidate" | "leave";
+        data: unknown;
+      };
+
+      switch (message.type) {
+        case "join":
+          console.log("Joining call");
+          // Send offer
+          peerConnection.createOffer().then((offer) => {
+            peerConnection?.setLocalDescription(offer);
+            ws.send(JSON.stringify({
+              type: "offer",
+              data: offer
+            }));
+          });
+          break;
+        case "offer":
+          // Send answer
+          peerConnection.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescription));
+          peerConnection.createAnswer().then((answer) => {
+            peerConnection.setLocalDescription(answer);
+            ws.send(JSON.stringify({
+              type: "answer",
+              data: answer
+            }));
+          });
+          console.log("Received offer");
+          break;
+        case "answer":
+          // Confirm answer
+          peerConnection.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescription));
+          console.log("Answered call");
+          break;
+        case "candidate":
+          peerConnection.addIceCandidate(new RTCIceCandidate(message.data as RTCIceCandidate));
+          console.log("Received candidate");
+          break;
+        case "leave":
+          // Disconnect somepee
+          break;
+        default:
+          break;
+      }
+    });
+  }
+
+  const end_call = () => callWS?.close();
+
+  const join_whiteboard = () => {
+    // alert("Not implemented");
+
+    const ws = server.api.chat.whiteboard[currentRoom!.id].subscribe({
+      $query: {
+        name: currentRoom!.username
+      }
+    });
+
+    ws.on("open", () => {
+      console.log("Connected to whiteboard");
+      setWhiteboardWS(ws.ws);
+      setWhiteboard(true);
+    });
+
+    ws.on("close", () => {
+      console.log("Disconnected from whiteboard");
+    });
+
+    ws.on("message", (m) => {
+      const message = m.data as {
+        type: "join" | "draw" | "clear" | "leave";
+        data: unknown;
+      };
+
+      switch (message.type) {
+        case "join":
+          console.log("Joining whiteboard");
+          break;
+        case "draw":
+          console.log("Drawing on whiteboard");
+          if (whiteboardCanvas.current) {
+            const canvas = whiteboardCanvas.current;
+            const ctx = canvas.getContext("2d");
+
+            if (ctx) {
+              const { x, y } = message.data as { x: number, y: number };
+
+              if (x == -1 && y == -1) {
+                ctx.closePath();
+              } else {
+                ctx.lineTo(x, y);
+                ctx.stroke();
+              }
+            }
+          }
+          break;
+        case "clear":
+          console.log("Clearing whiteboard");
+          break;
+        case "leave":
+          console.log("Leaving whiteboard");
+          break;
+        default:
+          break;
+      }
+    });
   }
 
   useEffect(() => {
     if (messageRef.current) messageRef.current.scrollTop = messageRef.current.scrollHeight;
-  }, [messages])
+    if (callMessageRef.current) {
+      // scroll to bottom
+      callMessageRef.current.scrollTop = callMessageRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    if (whiteboardCanvas.current) {
+      const canvas = whiteboardCanvas.current;
+      const ctx = canvas.getContext("2d");
+
+      // Set canvas size
+      canvas.width = canvas.clientWidth;
+
+      // Set canvas style
+      ctx!.lineCap = "round";
+
+      // Set canvas event hold click and draw
+      let drawing = false;
+      let lastX = 0;
+      let lastY = 0;
+
+      canvas.addEventListener("mousedown", (e) => {
+        drawing = true;
+        lastX = e.offsetX;
+        lastY = e.offsetY;
+
+        ctx!.beginPath();
+        ctx!.moveTo(lastX, lastY);
+      });
+
+      canvas.addEventListener("mousemove", (e) => {
+        if (drawing) {
+          const x = e.offsetX;
+          const y = e.offsetY;
+
+          ctx!.lineTo(x, y);
+          ctx!.stroke();
+
+          whiteboardWS?.send(JSON.stringify({ type: "draw", data: { x, y } }));
+        }
+      });
+
+      canvas.addEventListener("mouseup", () => {
+        drawing = false;
+        whiteboardWS?.send(JSON.stringify({ type: "draw", data: { x: -1, y: -1 } }));
+      });
+
+      canvas.addEventListener("mouseleave", () => {
+        drawing = false;
+        whiteboardWS?.send(JSON.stringify({ type: "draw", data: { x: -1, y: -1 } }));
+      });
+
+      return () => {
+        canvas.removeEventListener("mousedown", () => {});
+        canvas.removeEventListener("mousemove", () => {});
+        canvas.removeEventListener("mouseup", () => {});
+        canvas.removeEventListener("mouseleave", () => {});
+      }
+    }
+  }, [whiteboardCanvas, whiteboardWS]);
 
   useEffect(() => {
     server.api.chat.rooms.get().then(({ data }) => {
@@ -144,35 +411,33 @@ export default function App() {
               <div className={
                 classes(
                   "w-2/3 h-full max-h-max bg-gray-800 rounded relative",
-                  "flex items-center justify-center",
-                  // "grid gap-2 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 relative",
+                  // "grid gap-2 grid-row-3",
                 )
               }>
-                <div className="relative aspect-video w-full">
+                <div className="absolute aspect-video w-4/5 top-4 left-1/2 right-1/2 transform -translate-x-1/2">
                   <div className="w-full h-full relative">
-                    <video ref={remoteVideo} className="w-full h-full object-cover rounded" autoPlay />
-                    <div className="absolute bottom-0 right-0 p-2 bg-black/50 rounded w-full text-white">
-                      Remote
+                    <video ref={remoteVideo} className="w-full h-full object-cover aspect-video" autoPlay muted />
+                    <div className="absolute bottom-2 right-2 z-10 flex flex-row gap-2 text-white">
+                      Remote Video
                     </div>
                   </div>
                 </div>
-                <div className="absolute bottom-2 right-2 aspect-video w-1/4">
+
+                <div className="absolute aspect-video w-1/5 bottom-4 right-4">
                   <div className="w-full h-full relative">
-                    <video ref={localVideo} className="w-full h-full object-cover rounded" autoPlay muted />
-                    <div className="absolute bottom-0 right-0 p-2 bg-black/50 rounded w-full text-white">
-                      { currentRoom?.username }
+                    <video ref={localVideo} className="w-full h-full object-cover aspect-video" autoPlay muted />
+                    <div className="absolute bottom-2 right-2 z-10 flex flex-row gap-2 text-white">
+                      Local Video
                     </div>
                   </div>
                 </div>
               </div>
-              <div className="w-1/3 h-full max-h-max bg-gray-800 rounded flex flex-col gap-2 p-2">
-                <div className="p-2 h-full max-h-max overflow-y-scroll">
-                  {
-                    messages.map((message, i) => <Message key={i} {...message} />)
-                  }
+              <div className="w-1/3 h-full max-h-max bg-gray-800 rounded flex flex-col gap-2 p-2 relative">
+                <div className="p-2 w-[95%] h-[calc(100%-4rem)] max-h-max overflow-y-scroll absolute" ref={callMessageRef}>
+                  { messages.map((message, i) => <Message key={i} {...message} />) }
                 </div>
                 <form 
-                  className="flex flex-row gap-2"
+                  className="flex flex-row gap-2 absolute bottom-2 z-10 items-center bg-gray-800 justify-center rounded w-full left-0 px-2"
                   onSubmit={(e) => {
                     e.preventDefault();
                     
@@ -192,9 +457,7 @@ export default function App() {
             <div className="w-full flex flex-row items-center justify-center gap-2">
               <button 
                 className="p-2 bg-red-500 text-white rounded"
-                onClick={() => {
-                  setCalling(false);
-                }}
+                onClick={end_call}
               >
                 End Call
               </button>
@@ -229,6 +492,26 @@ export default function App() {
           </div>
         </div>
       ) }
+
+      {/* Whiteboard */}
+      {
+        whiteboard && (
+          <div className="w-screen h-screen max-h-screen absolute bg-black/80 p-4 z-50">
+            <canvas className="w-full aspect-video max-h-full bg-white rounded" ref={whiteboardCanvas} />
+
+            <button 
+              className="p-2 bg-red-500 text-white rounded absolute top-2 right-2"
+              onClick={() => {
+                if (!confirm("Are you sure you want to leave the whiteboard?")) return;
+                whiteboardWS?.close();
+                setWhiteboard(false);
+              }}
+            >
+              Leave
+            </button>
+          </div>
+        )
+      }
 
       {/* Side bar */}
       <div 
@@ -310,6 +593,9 @@ export default function App() {
             <div className="flex flex-row justify-between p-2 absolute top-0 z-10 bg-gray-700 w-full">
               <h1 className="text-2xl">{currentRoom.title}</h1>
               <div className="flex flex-row gap-2">
+                <button className="p-2 bg-white text-black rounded" onClick={join_whiteboard}>
+                  Whiteboard
+                </button>
                 <button
                   className="p-2 bg-blue-500 text-white rounded"
                   onClick={() => {
