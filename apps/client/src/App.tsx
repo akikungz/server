@@ -27,6 +27,27 @@ export default function App() {
 
   const [calling, setCalling] = useState<boolean>(false);
 
+  const localVideo = useRef<HTMLVideoElement>(null);
+  const remoteVideo = useRef<HTMLVideoElement>(null);
+
+  const Message = ({ user, timestamp, message }: ChatMessage) => {
+    return (
+      <div className="flex flex-col gap-2 p-2 w-full rounded">
+        <div className="flex flex-row items-center justify-between">
+          <span className={classes(
+            user == currentRoom?.username ? "text-blue-500" : "text-white",
+          )}>
+            {user}
+          </span>
+          <span className="text-gray-400 text-sm">
+            {new Date(timestamp).toLocaleString()}
+          </span>
+        </div>
+        <p className="text-white">{message}</p>
+      </div>
+    )
+  }
+
   const join_room = (room: { id: string, title: string }) => {
     if (currentRoom) currentRoom.ws.close();
 
@@ -74,6 +95,17 @@ export default function App() {
     ws.on("error", console.error);
   }
 
+  const join_call = () => {
+    if (!currentRoom) return;
+
+    setCalling(true);
+    const ws = server.api.chat.calls[currentRoom.id].subscribe({
+      $query: {
+        name: currentRoom.username
+      }
+    });
+  }
+
   useEffect(() => {
     if (messageRef.current) messageRef.current.scrollTop = messageRef.current.scrollHeight;
   }, [messages])
@@ -104,31 +136,39 @@ export default function App() {
     <div className="w-screen h-screen max-h-screen grid grid-cols-3 md:grid-cols-12 gap-2 p-4 bg-black relative overflow-hidden">
       {/* Video Call Overlay */}
       { calling && (
-        <div className="absolute z-10 w-full h-full bg-gray-900/50 p-16">
-          <div className="w-full h-full max-h-max bg-black/50 rounded-xl flex flex-col p-4 shadow relative">
+        <div className="absolute z-50 w-full h-full bg-gray-900/50">
+          <div className="w-full h-full max-h-max bg-black/90 rounded-xl flex flex-col p-4 shadow relative">
             <h1 className="text-2xl text-white">Video Call: Not implemented</h1>
             <span className="text-lg text-white">0:00:00</span>
             <div className="w-full h-full max-h-max py-4 flex flex-row gap-2 relative">
               <div className={
                 classes(
-                  "w-4/5 h-full max-h-max bg-gray-800 rounded",
-                  "grid gap-2",
-                  // Check if the user is sharing their screen
+                  "w-2/3 h-full max-h-max bg-gray-800 rounded relative",
+                  "flex items-center justify-center",
+                  // "grid gap-2 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 relative",
                 )
               }>
+                <div className="relative aspect-video w-full">
+                  <div className="w-full h-full relative">
+                    <video ref={remoteVideo} className="w-full h-full object-cover rounded" autoPlay />
+                    <div className="absolute bottom-0 right-0 p-2 bg-black/50 rounded w-full text-white">
+                      Remote
+                    </div>
+                  </div>
+                </div>
+                <div className="absolute bottom-2 right-2 aspect-video w-1/4">
+                  <div className="w-full h-full relative">
+                    <video ref={localVideo} className="w-full h-full object-cover rounded" autoPlay muted />
+                    <div className="absolute bottom-0 right-0 p-2 bg-black/50 rounded w-full text-white">
+                      { currentRoom?.username }
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="w-1/5 h-full max-h-max bg-gray-800 rounded flex flex-col gap-2 p-2">
+              <div className="w-1/3 h-full max-h-max bg-gray-800 rounded flex flex-col gap-2 p-2">
                 <div className="p-2 h-full max-h-max overflow-y-scroll">
                   {
-                    messages.map((message, i) => (
-                      <div key={i} className="p-2 flex-col">
-                        <div className="flex-row">
-                          <span className="text-blue-500">{message.user}</span>
-                          <span className="text-gray-500 px-2">{message.timestamp}</span>
-                        </div>
-                        <span>{message.message}</span>
-                      </div>
-                    ))
+                    messages.map((message, i) => <Message key={i} {...message} />)
                   }
                 </div>
                 <form 
@@ -274,12 +314,7 @@ export default function App() {
                   className="p-2 bg-blue-500 text-white rounded"
                   onClick={() => {
                     if (!confirm("Are you sure you want to join a call?")) return;
-                    alert("Not implemented");
-                    // setCalling(true);
-                    // currentRoom.ws.send(JSON.stringify({
-                    //   type: "call",
-                    //   message: "Join Call"
-                    // }));
+                    join_call();
                   }}
                 >
                   Join Call
@@ -299,15 +334,7 @@ export default function App() {
             </div>
             <div className="p-2 w-full h-auto max-h-[calc(100dvh-9rem)] z-0 absolute top-10 overflow-y-auto" ref={messageRef}>
               {
-                messages.map((message, i) => (
-                  <div key={i} className="p-2 flex-col max-w-full overflow-h">
-                    <div className="flex flex-row justify-between">
-                      <span className="text-blue-500">{message.user}</span>
-                      <span className="text-gray-500 px-2">{new Date(message.timestamp).toLocaleString()}</span>
-                    </div>
-                    <p className="text-wrap">{message.message}</p>
-                  </div>
-                ))
+                messages.map((message, i) => <Message key={i} {...message} />)
               }
             </div>
             <form 

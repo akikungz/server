@@ -189,7 +189,87 @@ export default new Elysia(
         }
     })
     .ws("/calls/:id", {
-        // open: (ws) => {
-            
-        // }
+        open: (ws) => {
+            // Make sure the room exists
+            if (!ws.data.rooms.find(room => room.id == ws.data.params.id)) {
+                ws.send("Room not found")
+                ws.close()
+                return;
+            }
+
+            if (!ws.data.calls[ws.data.params.id]) {
+                ws.data.calls[ws.data.params.id] = {
+                    room_id: ws.data.params.id,
+                    clients: [],
+                    offer: null
+                }
+            }
+
+            ws.data.calls[ws.data.params.id].clients.push({
+                id: ws.id,
+                name: ws.data.query.name!,
+                ws: ws
+            })
+
+            // Broadcast message to all clients in the room
+            ws.data.calls[ws.data.params.id].clients.forEach(client => {
+                (client.ws as typeof ws).send(JSON.stringify({
+                    type: "join",
+                    data: {
+                        id: ws.id,
+                        name: ws.data.query.name
+                    }
+                }))
+            })
+        },
+        message: (ws, m: unknown) => {
+            const message = m as {
+                type: "join" | "offer" | "answer" | "candidate";
+                data: unknown;
+            }
+
+            // WebRTC signaling
+            if (message.type === "offer") {
+                ws.data.calls[ws.data.params.id].offer = message.data as RTCSessionDescriptionInit
+
+                ws.data.calls[ws.data.params.id].clients.forEach(client => {
+                    if (client.id !== ws.id) {
+                        (client.ws as typeof ws).send(JSON.stringify({
+                            type: "offer",
+                            data: message.data
+                        }))
+                    }
+                })
+            } else if (message.type === "answer") {
+                ws.data.calls[ws.data.params.id].clients.forEach(client => {
+                    if (client.id !== ws.id) {
+                        (client.ws as typeof ws).send(JSON.stringify({
+                            type: "answer",
+                            data: message.data
+                        }))
+                    }
+                })
+            } else if (message.type === "candidate") {
+                ws.data.calls[ws.data.params.id].clients.forEach(client => {
+                    if (client.id !== ws.id) {
+                        (client.ws as typeof ws).send(JSON.stringify({
+                            type: "candidate",
+                            data: message.data
+                        }))
+                    }
+                })
+            }
+        },
+        close: (ws) => {
+            if (ws.data.calls[ws.data.params.id]) {
+                ws.data.calls[ws.data.params.id].clients.splice(
+                    ws.data.calls[ws.data.params.id].clients.findIndex(client => client.id == ws.id),
+                    1
+                )
+
+                if (ws.data.calls[ws.data.params.id].clients.length === 0) {
+                    delete ws.data.calls[ws.data.params.id]
+                }
+            }
+        }
     })
