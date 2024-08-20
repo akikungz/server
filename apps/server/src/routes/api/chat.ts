@@ -206,6 +206,13 @@ export default new Elysia(
                 }
             }
 
+            if (ws.data.calls[ws.data.params.id].clients.length > 2) {
+                // Reject the call if there are more than 2 clients
+                ws.send("Room is full")
+                ws.close()
+                return;
+            }
+
             ws.data.calls[ws.data.params.id].clients.push({
                 id: ws.id,
                 name: ws.data.query.name!,
@@ -229,6 +236,14 @@ export default new Elysia(
             const message = m as {
                 type: "join" | "offer" | "answer" | "candidate" | "leave";
                 data: unknown;
+            }
+
+            if (
+                ws.data.calls[ws.data.params.id].clients.length > 2 &&
+                ws.data.calls[ws.data.params.id].clients.find(client => client.id == ws.id)
+            ) {
+                ws.close();
+                return;
             }
 
             // WebRTC signaling
@@ -270,12 +285,21 @@ export default new Elysia(
                         }))
                     }
                 })
+            } else if (message.type === "join") {
+                ws.data.calls[ws.data.params.id].clients.forEach(client => {
+                    if (client.id !== ws.id) {
+                        (client.ws as typeof ws).send(JSON.stringify({
+                            type: "join",
+                            data: message.data
+                        }))
+                    }
+                })
             }
         },
         close: (ws) => {
             if (ws.data.calls[ws.data.params.id]) {
                 ws.data.calls[ws.data.params.id].clients.splice(
-                    ws.data.calls[ws.data.params.id].clients.findIndex(client => client.id == ws.id),
+                    ws.data.calls[ws.data.params.id].clients.findIndex(client => (client as unknown as typeof ws).id == ws.id),
                     1
                 )
 

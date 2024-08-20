@@ -20,6 +20,7 @@ export default function App() {
     id: string;
     title: string;
   }[]>([]);
+  const [roomWS, setRoomWS] = useState<WebSocket | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [currentRoom, setCurrentRoom] = useState<CurrentRoom | null>(null);
 
@@ -28,9 +29,11 @@ export default function App() {
 
   const [calling, setCalling] = useState<boolean>(false);
   const [callWS, setCallWS] = useState<WebSocket | null>(null);
+  const [callTimeout, setCallTimeout] = useState<Timer | null>(null);
 
   const localVideo = useRef<HTMLVideoElement>(null);
   const remoteVideo = useRef<HTMLVideoElement>(null);
+  const [remoteUsername, setRemoteUsername] = useState<string | null>(null);
 
   const Message = ({ user, timestamp, message }: ChatMessage) => {
     return (
@@ -130,10 +133,6 @@ export default function App() {
       if (remoteVideo.current) remoteVideo.current.srcObject = e.streams[0];
     }
 
-    peerConnection.sctp?.addEventListener("statechange", (e) => {
-      console.log("SCTP State", e);
-    })
-
     ws.on("open", () => {
       console.log("Connected to call");
       currentRoom.ws.send("Joining call");
@@ -152,63 +151,51 @@ export default function App() {
 
           stream.getTracks()
             .forEach(track => peerConnection.addTrack(track, stream));
-
-          ws.on("message", (m) => {
-            const message = m.data as {
-              type: "join" | "offer" | "answer" | "candidate";
-              data: unknown;
-            };
-
-            if (message.type === "join") {
-              console.log("Joining call");
-              peerConnection?.createOffer().then((offer) => {
-                peerConnection?.setLocalDescription(offer);
-                ws.send(JSON.stringify({
-                  type: "offer",
-                  data: offer
-                }));
-              });
-            }
-
-            if (message.type === "offer") {
-              peerConnection?.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescription));
-              peerConnection?.createAnswer().then((answer) => {
-                peerConnection?.setLocalDescription(answer);
-                ws.send(JSON.stringify({
-                  type: "answer",
-                  data: answer
-                }));
-              });
-            }
-
-            if (message.type === "answer") {
-              peerConnection?.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescription));
-            }
-
-            if (message.type === "candidate") {
-              peerConnection?.addIceCandidate(new RTCIceCandidate(message.data as RTCIceCandidate));
-            }
-          });
+          
+          ws.send(JSON.stringify({
+            type: "offer",
+            data: peerConnection.localDescription
+          }));
         }).catch(console.error);
-      
+
+      setCallTimeout(
+        setTimeout(() => {
+          peerConnection.createOffer().then((offer) => {
+            peerConnection.setLocalDescription(offer);
+            ws.send(JSON.stringify({
+              type: "offer",
+              data: offer
+            }));
+          });
+        }, 1000)
+      )
     });
 
     ws.on("close", () => {
       console.log("Disconnected from call");
+      currentRoom.ws.send("Leaving call");
       setCalling(false);
       setCallWS(null);
       peerConnection.close();
+      if (callTimeout) clearTimeout(callTimeout);
+      setRemoteUsername(null);
     });
 
     ws.on("message", (m) => {
+      if (typeof m.data == "string") {
+        alert(m.data);
+        return;
+      }
       const message = m.data as {
         type: "join" | "offer" | "answer" | "candidate" | "leave";
         data: unknown;
       };
 
       switch (message.type) {
-        case "join":
+        case "join": {
           console.log("Joining call");
+          const { name } = message.data as unknown as { name: string };
+          setRemoteUsername(name);
           // Send offer
           peerConnection.createOffer().then((offer) => {
             peerConnection?.setLocalDescription(offer);
@@ -218,9 +205,12 @@ export default function App() {
             }));
           });
           break;
+        }
         case "offer":
           // Send answer
-          peerConnection.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescription));
+          peerConnection.setRemoteDescription(
+            new RTCSessionDescription(message.data as RTCSessionDescription)
+          );
           peerConnection.createAnswer().then((answer) => {
             peerConnection.setLocalDescription(answer);
             ws.send(JSON.stringify({
@@ -232,7 +222,9 @@ export default function App() {
           break;
         case "answer":
           // Confirm answer
-          peerConnection.setRemoteDescription(new RTCSessionDescription(message.data as RTCSessionDescription));
+          peerConnection.setRemoteDescription(
+            new RTCSessionDescription(message.data as RTCSessionDescription)
+          );
           console.log("Answered call");
           break;
         case "candidate":
@@ -240,7 +232,7 @@ export default function App() {
           console.log("Received candidate");
           break;
         case "leave":
-          // Disconnect somepee
+          // Disconnect somepeer
           break;
         default:
           break;
@@ -264,6 +256,14 @@ export default function App() {
     }).catch(console.error);
 
     const ws = server.api.chat.rooms.subscribe();
+    ws.on("open", () => {
+      if (roomWS) {
+        roomWS.close();
+        console.log("Disconnected from rooms");
+      }
+      console.log("Connected to rooms");
+      setRoomWS(ws.ws);
+    });
 
     ws.on("message", (m) => {
       const { message, room } = m.data as { message: string, room: { id: string, title: string } };
@@ -286,8 +286,7 @@ export default function App() {
       { calling && (
         <div className="absolute z-50 w-full h-full bg-gray-900/50">
           <div className="w-full h-full max-h-max bg-black/90 rounded-xl flex flex-col p-4 shadow relative">
-            <h1 className="text-2xl text-white">Video Call: Not implemented</h1>
-            <span className="text-lg text-white">0:00:00</span>
+            <h1 className="text-2xl text-white">{ currentRoom?.title }</h1>
             <div className="w-full h-full max-h-max py-4 flex flex-row gap-2 relative">
               <div className={
                 classes(
@@ -297,9 +296,9 @@ export default function App() {
               }>
                 <div className="absolute aspect-video w-4/5 top-4 left-1/2 right-1/2 transform -translate-x-1/2">
                   <div className="w-full h-full relative">
-                    <video ref={remoteVideo} className="w-full h-full object-cover aspect-video" autoPlay muted />
+                    <video ref={remoteVideo} className="w-full h-full object-cover aspect-video" autoPlay />
                     <div className="absolute bottom-2 right-2 z-10 flex flex-row gap-2 text-white">
-                      Remote Video
+                      { remoteUsername }
                     </div>
                   </div>
                 </div>
@@ -308,7 +307,7 @@ export default function App() {
                   <div className="w-full h-full relative">
                     <video ref={localVideo} className="w-full h-full object-cover aspect-video" autoPlay muted />
                     <div className="absolute bottom-2 right-2 z-10 flex flex-row gap-2 text-white">
-                      Local Video
+                      { currentRoom?.username }
                     </div>
                   </div>
                 </div>
@@ -341,33 +340,6 @@ export default function App() {
                 onClick={end_call}
               >
                 End Call
-              </button>
-
-              {/* <button 
-                className="p-2 bg-blue-500 text-white rounded"
-                onClick={() => {
-                  alert("Not implemented");
-                }}
-              >
-                Share Screen
-              </button> */}
-
-              <button
-                className="p-2 bg-green-500 text-white rounded"
-                onClick={() => {
-                  alert("Not implemented");
-                }}
-              >
-                Camera
-              </button>
-
-              <button
-                className="p-2 bg-green-500 text-white rounded"
-                onClick={() => {
-                  alert("Not implemented");
-                }}
-              >
-                Microphone
               </button>
             </div>
           </div>
