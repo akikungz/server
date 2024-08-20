@@ -32,10 +32,6 @@ export default function App() {
   const localVideo = useRef<HTMLVideoElement>(null);
   const remoteVideo = useRef<HTMLVideoElement>(null);
 
-  const [whiteboard, setWhiteboard] = useState<boolean>(false);
-  const [whiteboardWS, setWhiteboardWS] = useState<WebSocket | null>(null);
-  const whiteboardCanvas = useRef<HTMLCanvasElement>(null);
-
   const Message = ({ user, timestamp, message }: ChatMessage) => {
     return (
       <div className="flex flex-col gap-2 p-2 w-full rounded">
@@ -254,65 +250,6 @@ export default function App() {
 
   const end_call = () => callWS?.close();
 
-  const join_whiteboard = () => {
-    // alert("Not implemented");
-
-    const ws = server.api.chat.whiteboard[currentRoom!.id].subscribe({
-      $query: {
-        name: currentRoom!.username
-      }
-    });
-
-    ws.on("open", () => {
-      console.log("Connected to whiteboard");
-      setWhiteboardWS(ws.ws);
-      setWhiteboard(true);
-    });
-
-    ws.on("close", () => {
-      console.log("Disconnected from whiteboard");
-    });
-
-    ws.on("message", (m) => {
-      const message = m.data as {
-        type: "join" | "draw" | "clear" | "leave";
-        data: unknown;
-      };
-
-      switch (message.type) {
-        case "join":
-          console.log("Joining whiteboard");
-          break;
-        case "draw":
-          console.log("Drawing on whiteboard");
-          if (whiteboardCanvas.current) {
-            const canvas = whiteboardCanvas.current;
-            const ctx = canvas.getContext("2d");
-
-            if (ctx) {
-              const { x, y } = message.data as { x: number, y: number };
-
-              if (x == -1 && y == -1) {
-                ctx.closePath();
-              } else {
-                ctx.lineTo(x, y);
-                ctx.stroke();
-              }
-            }
-          }
-          break;
-        case "clear":
-          console.log("Clearing whiteboard");
-          break;
-        case "leave":
-          console.log("Leaving whiteboard");
-          break;
-        default:
-          break;
-      }
-    });
-  }
-
   useEffect(() => {
     if (messageRef.current) messageRef.current.scrollTop = messageRef.current.scrollHeight;
     if (callMessageRef.current) {
@@ -320,62 +257,6 @@ export default function App() {
       callMessageRef.current.scrollTop = callMessageRef.current.scrollHeight;
     }
   }, [messages]);
-
-  useEffect(() => {
-    if (whiteboardCanvas.current) {
-      const canvas = whiteboardCanvas.current;
-      const ctx = canvas.getContext("2d");
-
-      // Set canvas size
-      canvas.width = canvas.clientWidth;
-
-      // Set canvas style
-      ctx!.lineCap = "round";
-
-      // Set canvas event hold click and draw
-      let drawing = false;
-      let lastX = 0;
-      let lastY = 0;
-
-      canvas.addEventListener("mousedown", (e) => {
-        drawing = true;
-        lastX = e.offsetX;
-        lastY = e.offsetY;
-
-        ctx!.beginPath();
-        ctx!.moveTo(lastX, lastY);
-      });
-
-      canvas.addEventListener("mousemove", (e) => {
-        if (drawing) {
-          const x = e.offsetX;
-          const y = e.offsetY;
-
-          ctx!.lineTo(x, y);
-          ctx!.stroke();
-
-          whiteboardWS?.send(JSON.stringify({ type: "draw", data: { x, y } }));
-        }
-      });
-
-      canvas.addEventListener("mouseup", () => {
-        drawing = false;
-        whiteboardWS?.send(JSON.stringify({ type: "draw", data: { x: -1, y: -1 } }));
-      });
-
-      canvas.addEventListener("mouseleave", () => {
-        drawing = false;
-        whiteboardWS?.send(JSON.stringify({ type: "draw", data: { x: -1, y: -1 } }));
-      });
-
-      return () => {
-        canvas.removeEventListener("mousedown", () => {});
-        canvas.removeEventListener("mousemove", () => {});
-        canvas.removeEventListener("mouseup", () => {});
-        canvas.removeEventListener("mouseleave", () => {});
-      }
-    }
-  }, [whiteboardCanvas, whiteboardWS]);
 
   useEffect(() => {
     server.api.chat.rooms.get().then(({ data }) => {
@@ -493,26 +374,6 @@ export default function App() {
         </div>
       ) }
 
-      {/* Whiteboard */}
-      {
-        whiteboard && (
-          <div className="w-screen h-screen max-h-screen absolute bg-black/80 p-4 z-50">
-            <canvas className="w-full aspect-video max-h-full bg-white rounded" ref={whiteboardCanvas} />
-
-            <button 
-              className="p-2 bg-red-500 text-white rounded absolute top-2 right-2"
-              onClick={() => {
-                if (!confirm("Are you sure you want to leave the whiteboard?")) return;
-                whiteboardWS?.close();
-                setWhiteboard(false);
-              }}
-            >
-              Leave
-            </button>
-          </div>
-        )
-      }
-
       {/* Side bar */}
       <div 
         className={
@@ -593,9 +454,6 @@ export default function App() {
             <div className="flex flex-row justify-between p-2 absolute top-0 z-10 bg-gray-700 w-full">
               <h1 className="text-2xl">{currentRoom.title}</h1>
               <div className="flex flex-row gap-2">
-                <button className="p-2 bg-white text-black rounded" onClick={join_whiteboard}>
-                  Whiteboard
-                </button>
                 <button
                   className="p-2 bg-blue-500 text-white rounded"
                   onClick={() => {
