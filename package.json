@@ -7,7 +7,8 @@
     "lint": "turbo lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "shadcn-ui": "cd packages/ui && bunx shadcn-ui",
-    "postshadcn-ui": "bun packages/ui/scripts/shadcn-ui.ts"
+    "postshadcn-ui": "bun packages/ui/scripts/shadcn-ui.ts",
+    "dev:server": "cd apps/server && bun dev"
   },
   "devDependencies": {
     "prettier": "^3.2.5",
@@ -19,6 +20,7 @@
   },
   "packageManager": "bun@1.1.21",
   "workspaces": [
-    "apps/*"
+    "apps/server",
+    "apps/client"
   ]
 }
